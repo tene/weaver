@@ -1,0 +1,13 @@
+[package]
+name = "weaver"
+version = "0.1.0"
+authors = ["Stephen Weeks <tene@allalone.org>"]
+
+[dependencies]
+termion = "*"
+liner = "*"
+
+[dependencies.tui]
+version = "*"
+default-features = false
+features = ['termion']
