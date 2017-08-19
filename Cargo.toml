@@ -6,6 +6,15 @@ authors = ["Stephen Weeks <tene@allalone.org>"]
 [dependencies]
 termion = "*"
 liner = "*"
+serde = "*"
+serde_cbor = "*"
+tokio-serde-cbor = "*"
+bytes = "*"
+futures = "*"
+tokio-io = "*"
+tokio-core = "*"
+tokio-proto = "*"
+tokio-service = "*"
 
 [dependencies.tui]
 version = "*"

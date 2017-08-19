@@ -1,6 +1,13 @@
 extern crate liner;
+extern crate bytes;
+extern crate futures;
+extern crate tokio_io;
+extern crate tokio_proto;
+extern crate tokio_service;
+extern crate tokio_serde_cbor;
+
 use liner::Context;
-use liner::KeyBindings;
+//use liner::KeyBindings;
 use std::io::ErrorKind;
 
 fn main() {
