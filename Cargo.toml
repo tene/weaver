@@ -1,13 +1,13 @@
 [package]
 name = "weaver"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["Stephen Weeks <tene@allalone.org>"]
 
 [dependencies]
-termion = "*"
-liner = "*"
-
-[dependencies.tui]
-version = "*"
-default-features = false
-features = ['termion']
+nuklear-rust = {version = "~0.3", features = ["rust_allocator"]}
+nuklear-backend-gfx = "~0.6"
+gfx_device_gl = "~0.15"
+gfx_window_glutin = "~0.20"
+gfx = "~0.17"
+glutin = "~0.12"
+image = "~0.12"
