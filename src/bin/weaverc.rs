@@ -67,9 +67,7 @@ impl App for WeaverTui {
                 }
                 _ => Ok(()),
             },
-            Event::AppEvent(_) => {
-                Ok(())
-            }
+            Event::AppEvent(_) => Ok(()),
         }
     }
 }
