@@ -5,3 +5,16 @@ authors = ["Stephen Weeks <tene@allalone.org>"]
 
 [dependencies]
 text-ui = { path = "../text-ui/" }
+tokio = "0.1.6"
+tokio-io = "0.1.6"
+serde_derive = "1.0"
+futures = "0.1.21"
+serde = "1.0"
+rmp-serde = "0.13"
+
+[dependencies.tokio-uds]
+git = 'https://github.com/Marwes/tokio-uds'
+branch = 'only_tokio_upgrade'
+
+[dependencies.tokio-serde-msgpack]
+path = '../tokio-serde-msgpack'
