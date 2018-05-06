@@ -12,7 +12,7 @@ use tokio::prelude::{Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 use tokio_uds::{UnixListener, UnixStream};
 
-use weaver::{ClientMessage, ServerMessage};
+use weaver::{weaver_socket_path, ClientMessage, ServerMessage};
 
 pub struct ClientConn {
     pub send_buf: UnboundedSender<ServerMessage>,
@@ -39,6 +39,7 @@ impl ClientConn {
                     id: msg.id,
                     name: format!("server {}", msg.name),
                 };
+                println!("{:#?}", response);
                 let _ = asdf.unbounded_send(response);
                 Ok(())
             })
@@ -53,8 +54,7 @@ impl ClientConn {
 }
 
 fn main() {
-    let mut socketpath = std::env::home_dir().unwrap();
-    socketpath.push(".weaver.socket");
+    let socketpath = weaver_socket_path();
     let _ = std::fs::remove_file(&socketpath);
 
     let listener = UnixListener::bind(socketpath).unwrap();
