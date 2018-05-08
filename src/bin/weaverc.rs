@@ -22,7 +22,7 @@ use tokio::prelude::{Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 use tokio_uds::UnixStream;
 
-use weaver::{weaver_socket_path, ClientMessage, ServerMessage};
+use weaver::{weaver_socket_path, ClientMessage, ClientRequest, ServerMessage};
 
 #[derive(Debug, PartialEq)]
 pub enum WeaverNotification {
@@ -50,6 +50,7 @@ impl WeaverClientCore {
 pub struct WeaverClient {
     pub commands: UnboundedSender<ClientMessage>,
     _core: Arc<RwLock<WeaverClientCore>>,
+    msgcounter: u32,
 }
 
 impl WeaverClient {
@@ -61,6 +62,7 @@ impl WeaverClient {
 
         // XXX Can't share Sender between threads
         let notifications2 = notifications.clone();
+        let msgcounter = 0;
 
         let core = WeaverClientCore::new(notifications);
         let core2 = core.clone();
@@ -100,14 +102,26 @@ impl WeaverClient {
         WeaverClient {
             commands,
             _core: core2,
+            msgcounter,
         }
     }
 
-    pub fn send_cmd(
+    pub fn run_command(
         &mut self,
-        cmd: ClientMessage,
+        cmd: String,
     ) -> Result<(), FutureSendError<weaver::ClientMessage>> {
-        self.commands.unbounded_send(cmd)
+        let request = ClientRequest::RunCommand(cmd);
+        self.send_request(request)
+    }
+
+    pub fn send_request(
+        &mut self,
+        request: ClientRequest,
+    ) -> Result<(), FutureSendError<weaver::ClientMessage>> {
+        self.msgcounter += 1;
+        let id = self.msgcounter;
+        let msg = ClientMessage { id, request };
+        self.commands.unbounded_send(msg)
     }
 }
 
@@ -136,15 +150,10 @@ impl WeaverTui {
 
     fn submit_input(&mut self) {
         let text = self.input.write().unwrap().submit();
+        self.weaver.run_command(text.clone()).unwrap();
         let lines = text.lines();
         let mut log = self.log.write().unwrap();
         for line in lines {
-            self.weaver
-                .send_cmd(ClientMessage {
-                    id: 5,
-                    name: line.to_owned(),
-                })
-                .unwrap();
             log.push(line.to_owned());
         }
     }

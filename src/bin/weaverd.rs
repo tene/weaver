@@ -12,7 +12,7 @@ use tokio::prelude::{Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 use tokio_uds::{UnixListener, UnixStream};
 
-use weaver::{weaver_socket_path, ClientMessage, ServerMessage};
+use weaver::{weaver_socket_path, ClientMessage, ClientRequest, ServerMessage, ServerNotice};
 
 pub struct ClientConn {
     pub send_buf: UnboundedSender<ServerMessage>,
@@ -35,9 +35,12 @@ impl ClientConn {
         let asdf = chan_send.clone();
         let handle_messages = socket_rx
             .for_each(move |msg| {
+                println!("{:#?}", msg);
                 let response = ServerMessage {
                     id: msg.id,
-                    name: format!("server {}", msg.name),
+                    notice: match msg.request {
+                        ClientRequest::RunCommand(c) => ServerNotice::CommandStarted(0, c),
+                    },
                 };
                 println!("{:#?}", response);
                 let _ = asdf.unbounded_send(response);
