@@ -3,19 +3,29 @@ extern crate rmp_serde;
 extern crate tokio;
 extern crate tokio_io;
 extern crate tokio_serde_msgpack;
+extern crate tokio_threadpool;
 extern crate tokio_uds;
 extern crate weaver;
 
+use futures::future::poll_fn;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 
 use tokio::prelude::{Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
+use tokio_threadpool::blocking;
 use tokio_uds::{UnixListener, UnixStream};
+
+use std::process::Command;
 
 use weaver::{weaver_socket_path, ClientMessage, ClientRequest, ServerMessage, ServerNotice};
 
 pub struct ClientConn {
     pub send_buf: UnboundedSender<ServerMessage>,
+}
+
+fn send_notice(chan: &UnboundedSender<ServerMessage>, id: u32, notice: ServerNotice) {
+    let msg = ServerMessage { id, notice };
+    let _ = chan.unbounded_send(msg);
 }
 
 impl ClientConn {
@@ -33,17 +43,59 @@ impl ClientConn {
         tokio::spawn(forward_to_client);
 
         let asdf = chan_send.clone();
+        let mut command_index = 0;
         let handle_messages = socket_rx
             .for_each(move |msg| {
                 println!("{:#?}", msg);
-                let response = ServerMessage {
-                    id: msg.id,
-                    notice: match msg.request {
-                        ClientRequest::RunCommand(c) => ServerNotice::CommandStarted(0, c),
-                    },
-                };
-                println!("{:#?}", response);
-                let _ = asdf.unbounded_send(response);
+                let req_id = msg.id;
+                match msg.request {
+                    ClientRequest::RunCommand(c) => {
+                        let cmd_idx = command_index;
+                        command_index += 1;
+                        let cmd_reply = asdf.clone();
+                        send_notice(
+                            &cmd_reply,
+                            req_id,
+                            ServerNotice::CommandStarted(cmd_idx, c.clone()),
+                        );
+                        let run_command = poll_fn(move || {
+                            blocking(|| {
+                                Command::new("bash")
+                                    .arg("-c")
+                                    .arg(&c)
+                                    .output()
+                                    .expect("ERR: Failed to run command??")
+                            }).map_err(|e| panic!("Threadpool Problem: {:#?}", e))
+                        }).and_then(move |output| {
+                            send_notice(
+                                &cmd_reply,
+                                req_id,
+                                ServerNotice::CommandOutput(
+                                    cmd_idx,
+                                    String::from_utf8_lossy(&output.stdout).to_string(),
+                                ),
+                            );
+                            send_notice(
+                                &cmd_reply,
+                                req_id,
+                                ServerNotice::CommandErr(
+                                    cmd_idx,
+                                    String::from_utf8_lossy(&output.stderr).to_string(),
+                                ),
+                            );
+                            send_notice(
+                                &cmd_reply,
+                                req_id,
+                                ServerNotice::CommandCompleted(
+                                    cmd_idx,
+                                    output.status.code().unwrap(),
+                                ),
+                            );
+                            Ok(())
+                        });
+                        tokio::spawn(run_command);
+                    }
+                }
                 Ok(())
             })
             .map_err(|e| println!("Recv Err: {:#?}", e));

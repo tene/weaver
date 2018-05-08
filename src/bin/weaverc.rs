@@ -22,7 +22,7 @@ use tokio::prelude::{Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 use tokio_uds::UnixStream;
 
-use weaver::{weaver_socket_path, ClientMessage, ClientRequest, ServerMessage};
+use weaver::{weaver_socket_path, ClientMessage, ClientRequest, ServerMessage, WeaverCommand};
 
 #[derive(Debug, PartialEq)]
 pub enum WeaverNotification {
@@ -32,11 +32,16 @@ pub enum WeaverNotification {
 
 struct WeaverClientCore {
     pub notifications: Sender<WeaverNotification>,
+    pub commands: Vec<WeaverCommand>,
 }
 
 impl WeaverClientCore {
     fn new(notifications: Sender<WeaverNotification>) -> Arc<RwLock<Self>> {
-        Arc::new(RwLock::new(WeaverClientCore { notifications }))
+        let commands = vec![];
+        Arc::new(RwLock::new(WeaverClientCore {
+            notifications,
+            commands,
+        }))
     }
 
     fn _send_notification(
@@ -47,6 +52,7 @@ impl WeaverClientCore {
     }
 }
 
+// XXX Need to refactor this into impl Future
 pub struct WeaverClient {
     pub commands: UnboundedSender<ClientMessage>,
     _core: Arc<RwLock<WeaverClientCore>>,
@@ -178,7 +184,6 @@ impl App for WeaverTui {
         self.vbox.clone()
     }
     fn handle_event(&mut self, event: Event<Self::MyEvent>) -> Result<(), Option<String>> {
-        self.log_msg(&format!("{:?}", event));
         match event {
             Event::InputEvent(i) => match i {
                 Input::Key(Key::Esc) => Err(None),
@@ -188,7 +193,10 @@ impl App for WeaverTui {
                 }
                 _ => Ok(()),
             },
-            Event::AppEvent(_) => Ok(()),
+            Event::AppEvent(_) => {
+                self.log_msg(&format!("{:?}", event));
+                Ok(())
+            }
         }
     }
 }

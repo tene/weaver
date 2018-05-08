@@ -5,6 +5,14 @@ extern crate serde;
 use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct WeaverCommand {
+    pub cmd: String,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub status: Option<i32>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub enum ClientRequest {
     RunCommand(String),
 }
@@ -17,9 +25,10 @@ pub struct ClientMessage {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub enum ServerNotice {
-    CommandStarted(u32, String),
-    CommandOutput(u32, String),
-    CommandCompleted(u32, i32),
+    CommandStarted(usize, String),
+    CommandOutput(usize, String),
+    CommandErr(usize, String),
+    CommandCompleted(usize, i32),
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
