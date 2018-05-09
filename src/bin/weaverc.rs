@@ -7,9 +7,10 @@ extern crate weaver;
 
 use text_ui::app::App;
 use text_ui::backend::Backend;
-use text_ui::widget::{shared, Linear, Shared, Text, TextInput};
+use text_ui::widget::{shared, DbgDump, Linear, Shared, Text, TextInput};
 use text_ui::{Event, Input, Key};
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::SendError as StdSendError;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
@@ -26,36 +27,52 @@ use weaver::{weaver_socket_path, ClientMessage, ClientRequest, ServerMessage, We
 
 #[derive(Debug, PartialEq)]
 pub enum WeaverNotification {
-    _Heartbeat,
+    Updated,
     Server(ServerMessage),
 }
 
-struct WeaverClientCore {
-    pub notifications: Sender<WeaverNotification>,
-    pub commands: Vec<WeaverCommand>,
+#[derive(Debug)]
+pub struct WeaverClientCore {
+    //pub notifications: Sender<WeaverNotification>,
+    pub command_history: BTreeMap<usize, WeaverCommand>,
 }
 
 impl WeaverClientCore {
-    fn new(notifications: Sender<WeaverNotification>) -> Arc<RwLock<Self>> {
-        let commands = vec![];
+    //fn new(notifications: Sender<WeaverNotification>) -> Arc<RwLock<Self>> {
+    fn new() -> Arc<RwLock<Self>> {
+        let command_history = BTreeMap::new();
         Arc::new(RwLock::new(WeaverClientCore {
-            notifications,
-            commands,
+            //notifications,
+            command_history,
         }))
     }
 
-    fn _send_notification(
-        &self,
-        n: WeaverNotification,
-    ) -> Result<(), StdSendError<WeaverNotification>> {
-        self.notifications.send(n)
+    fn do_update(&mut self, msg: ServerMessage) -> Option<WeaverNotification> {
+        use weaver::ServerNotice::*;
+        match msg.notice {
+            CommandStarted(i, cmd) => {
+                let _ = self.command_history.insert(i, WeaverCommand::new(cmd));
+            }
+            CommandOutput(i, text) => self.command_history
+                .get_mut(&i)
+                .unwrap()
+                .stdout
+                .push_str(&text),
+            CommandErr(i, text) => self.command_history
+                .get_mut(&i)
+                .unwrap()
+                .stderr
+                .push_str(&text),
+            CommandCompleted(i, rv) => self.command_history.get_mut(&i).unwrap().status = Some(rv),
+        };
+        Some(WeaverNotification::Updated)
     }
 }
 
 // XXX Need to refactor this into impl Future
 pub struct WeaverClient {
     pub commands: UnboundedSender<ClientMessage>,
-    _core: Arc<RwLock<WeaverClientCore>>,
+    pub core: Arc<RwLock<WeaverClientCore>>,
     msgcounter: u32,
 }
 
@@ -70,7 +87,8 @@ impl WeaverClient {
         let notifications2 = notifications.clone();
         let msgcounter = 0;
 
-        let core = WeaverClientCore::new(notifications);
+        //let core = WeaverClientCore::new(notifications);
+        let core = WeaverClientCore::new();
         let core2 = core.clone();
         let socketpath = weaver_socket_path();
         let socketf = futures::future::result(UnixStream::connect(socketpath));
@@ -92,7 +110,10 @@ impl WeaverClient {
                 tokio::spawn(send_commands);
 
                 let recv_msgs = socket_rx
-                    .for_each(move |msg| notifications2.send(WeaverNotification::Server(msg)))
+                    .for_each(move |msg| match core2.write().unwrap().do_update(msg) {
+                        Some(notification) => notifications2.send(notification),
+                        None => Ok(()),
+                    })
                     .and_then(|_| Ok(()))
                     .map_err(|e| panic!("Notification Send Error: {:#?}", e));
 
@@ -107,7 +128,7 @@ impl WeaverClient {
         });
         WeaverClient {
             commands,
-            _core: core2,
+            core,
             msgcounter,
         }
     }
@@ -136,14 +157,23 @@ struct WeaverTui {
     input: Shared<TextInput>,
     vbox: Shared<Linear>,
     weaver: WeaverClient,
+    core: Shared<Arc<RwLock<WeaverClientCore>>>,
+    dbgcore: Shared<DbgDump<Arc<RwLock<WeaverClientCore>>>>,
 }
 
 impl WeaverTui {
     fn new(weaver: WeaverClient) -> WeaverTui {
         let log = shared(Text::new(vec![]));
         let input = shared(TextInput::new(""));
+        // XXX Ugly hack D:
+        let core = shared(weaver.core.clone());
+        let dbgcore = shared(DbgDump::new(&core));
+        let mut contentbox = Linear::hbox();
+        contentbox.push(&log);
+        contentbox.push(&dbgcore);
+        let content = shared(contentbox);
         let mut mainbox = Linear::vbox();
-        mainbox.push(&log);
+        mainbox.push(&content);
         mainbox.push(&input);
         let vbox = shared(mainbox);
         WeaverTui {
@@ -151,6 +181,8 @@ impl WeaverTui {
             input,
             vbox,
             weaver,
+            core,
+            dbgcore,
         }
     }
 
@@ -194,7 +226,7 @@ impl App for WeaverTui {
                 _ => Ok(()),
             },
             Event::AppEvent(_) => {
-                self.log_msg(&format!("{:?}", event));
+                //self.log_msg(&format!("{:?}", event));
                 Ok(())
             }
         }

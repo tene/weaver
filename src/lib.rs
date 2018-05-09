@@ -7,9 +7,20 @@ use std::path::PathBuf;
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub struct WeaverCommand {
     pub cmd: String,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
+    pub stdout: String,
+    pub stderr: String,
     pub status: Option<i32>,
+}
+
+impl WeaverCommand {
+    pub fn new(cmd: String) -> Self {
+        WeaverCommand {
+            cmd,
+            stdout: String::new(),
+            stderr: String::new(),
+            status: None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
