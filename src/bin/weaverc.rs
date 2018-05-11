@@ -7,9 +7,10 @@ extern crate weaver;
 
 use text_ui::app::App;
 use text_ui::backend::Backend;
-use text_ui::widget::Widget;
 use text_ui::pane::Pane;
-use text_ui::widget::{shared, DbgDump, Line, Linear, Shared, Text, TextInput};
+//use text_ui::widget::DbgDump;
+use text_ui::widget::Widget;
+use text_ui::widget::{shared, Line, Linear, Readline, Shared, Text};
 use text_ui::{text_to_lines, Event, Input, Key, Position, Size};
 
 use std::collections::BTreeMap;
@@ -162,10 +163,11 @@ impl<'a> Future for WeaverClient<'a> {
         while let Async::Ready(msg) = self.socket_rx.poll()? {
             if let Some(msg) = msg {
                 self.notifications
-                    .send(WeaverNotification::Server(msg.clone())).unwrap();
+                    .send(WeaverNotification::Server(msg.clone()))
+                    .unwrap();
                 match self.do_update(msg) {
                     Some(notification) => self.notifications.send(notification).unwrap(),
-                    None => {},
+                    None => {}
                 };
             } else {
                 return Ok(Async::Ready(()));
@@ -184,7 +186,7 @@ impl Widget for WeaverStateWidget {
         let mut rv = vec![];
         let height = size.height as usize;
         let mut ctr: usize = 0;
-        for (i, cmd) in self.state.read().unwrap().command_history.iter().rev() {
+        for (_i, cmd) in self.state.read().unwrap().command_history.iter().rev() {
             let status = match cmd.status {
                 None => '…',
                 Some(0) => '✔',
@@ -200,13 +202,12 @@ impl Widget for WeaverStateWidget {
                 ctr += stdout.len();
                 content.extend(stdout);
             }
-            let contentlen = content.len();
             if ctr >= height {
                 let top_spill = ctr - height;
                 content = content.split_off(top_spill);
                 ctr = height;
             }
-            let pos = Position::new(0,size.height - ctr as u16);
+            let pos = Position::new(0, size.height - ctr as u16);
             rv.push(Pane::new(pos, content));
             if ctr == height {
                 break;
@@ -218,7 +219,7 @@ impl Widget for WeaverStateWidget {
 
 struct WeaverTui {
     log: Shared<Text>,
-    input: Shared<TextInput>,
+    input: Shared<Readline>,
     vbox: Shared<Linear>,
     content: Shared<Linear>,
     state: Shared<WeaverState>,
@@ -229,14 +230,14 @@ struct WeaverTui {
 impl WeaverTui {
     fn new(state: Arc<RwLock<WeaverState>>) -> WeaverTui {
         let log = shared(Text::new(vec![]));
-        let input = shared(TextInput::new(""));
+        let input = shared(Readline::new());
         let state: Shared<WeaverState> = state.into();
-        let statew = shared(WeaverStateWidget{ state: state.clone() });
-        let dbgdump = shared(DbgDump::new(&state));
+        let statew = shared(WeaverStateWidget {
+            state: state.clone(),
+        });
+        //let dbgdump = shared(DbgDump::new(&state));
         let show_debug = false;
-        // XXX Ugly hack D:
         let mut contentbox = Linear::hbox();
-        //contentbox.push(&log);
         //contentbox.push(&dbgdump);
         contentbox.push(&statew);
         let content = shared(contentbox);
@@ -274,17 +275,12 @@ impl WeaverTui {
     }
 
     fn submit_input(&mut self) {
-        let text = self.input.write().unwrap().submit();
+        let text = self.input.write().unwrap().finalize();
         self.state
             .write()
             .unwrap()
             .run_command(text.clone())
             .unwrap();
-        /*let lines = text.lines();
-        let mut log = self.log.write().unwrap();
-        for line in lines {
-            log.push(line.to_owned());
-        }*/
     }
 
     fn log_msg(&mut self, msg: &str) {
@@ -295,7 +291,7 @@ impl WeaverTui {
     fn input(&mut self, key: Key) {
         match key {
             Key::Char('\n') => self.submit_input(),
-            k => self.input.write().unwrap().keypress(k),
+            k => self.input.write().unwrap().process_key(k),
         }
     }
 }
