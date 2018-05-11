@@ -34,7 +34,7 @@ pub struct ClientMessage {
     pub request: ClientRequest,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum ServerNotice {
     CommandStarted(usize, String),
     CommandOutput(usize, String),
@@ -42,7 +42,7 @@ pub enum ServerNotice {
     CommandCompleted(usize, i32),
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ServerMessage {
     pub id: u32,
     pub notice: ServerNotice,

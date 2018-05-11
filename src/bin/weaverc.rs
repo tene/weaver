@@ -11,15 +11,16 @@ use text_ui::widget::{shared, DbgDump, Linear, Shared, Text, TextInput};
 use text_ui::{Event, Input, Key};
 
 use std::collections::BTreeMap;
-use std::sync::mpsc::SendError as StdSendError;
+use std::fmt;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread;
 
 use futures::sync::mpsc::SendError as FutureSendError;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::AsyncSink;
 
-use tokio::prelude::{Future, Sink, Stream};
+use tokio::prelude::{task, Async, Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 use tokio_uds::UnixStream;
 
@@ -31,108 +32,30 @@ pub enum WeaverNotification {
     Server(ServerMessage),
 }
 
-#[derive(Debug)]
-pub struct WeaverClientCore {
-    //pub notifications: Sender<WeaverNotification>,
+pub struct WeaverState {
     pub command_history: BTreeMap<usize, WeaverCommand>,
-}
-
-impl WeaverClientCore {
-    //fn new(notifications: Sender<WeaverNotification>) -> Arc<RwLock<Self>> {
-    fn new() -> Arc<RwLock<Self>> {
-        let command_history = BTreeMap::new();
-        Arc::new(RwLock::new(WeaverClientCore {
-            //notifications,
-            command_history,
-        }))
-    }
-
-    fn do_update(&mut self, msg: ServerMessage) -> Option<WeaverNotification> {
-        use weaver::ServerNotice::*;
-        match msg.notice {
-            CommandStarted(i, cmd) => {
-                let _ = self.command_history.insert(i, WeaverCommand::new(cmd));
-            }
-            CommandOutput(i, text) => self.command_history
-                .get_mut(&i)
-                .unwrap()
-                .stdout
-                .push_str(&text),
-            CommandErr(i, text) => self.command_history
-                .get_mut(&i)
-                .unwrap()
-                .stderr
-                .push_str(&text),
-            CommandCompleted(i, rv) => self.command_history.get_mut(&i).unwrap().status = Some(rv),
-        };
-        Some(WeaverNotification::Updated)
-    }
-}
-
-// XXX Need to refactor this into impl Future
-pub struct WeaverClient {
-    pub commands: UnboundedSender<ClientMessage>,
-    pub core: Arc<RwLock<WeaverClientCore>>,
+    pub commands_tx: UnboundedSender<ClientMessage>,
     msgcounter: u32,
 }
 
-impl WeaverClient {
-    pub fn new(notifications: Sender<WeaverNotification>) -> Self {
-        let (commands, commands_tx): (
-            UnboundedSender<ClientMessage>,
-            UnboundedReceiver<ClientMessage>,
-        ) = unbounded();
+impl fmt::Debug for WeaverState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("WeaverState")
+            .field("command_history", &self.command_history)
+            .finish()
+    }
+}
 
-        // XXX Can't share Sender between threads
-        let notifications2 = notifications.clone();
+impl WeaverState {
+    pub fn new(commands_tx: UnboundedSender<ClientMessage>) -> Self {
+        let command_history = BTreeMap::new();
         let msgcounter = 0;
-
-        //let core = WeaverClientCore::new(notifications);
-        let core = WeaverClientCore::new();
-        let core2 = core.clone();
-        let socketpath = weaver_socket_path();
-        let socketf = futures::future::result(UnixStream::connect(socketpath));
-
-        let run_client_socket = socketf
-            .and_then(|socket| {
-                let (socket_rx, socket_tx): (
-                    MsgPackReader<UnixStream, ServerMessage>,
-                    MsgPackWriter<UnixStream, ClientMessage>,
-                ) = from_io(socket);
-                let socket_tx = socket_tx.sink_map_err(|e| println!("Send Err: {:#?}", e));
-                let socket_rx = socket_rx.map_err(|e| panic!("Decode Error: {:#?}", e));
-
-                let send_commands = commands_tx
-                    .forward(socket_tx)
-                    .map_err(|e| println!("Encode Err: {:#?}", e))
-                    .and_then(|_| Ok(()));
-
-                tokio::spawn(send_commands);
-
-                let recv_msgs = socket_rx
-                    .for_each(move |msg| match core2.write().unwrap().do_update(msg) {
-                        Some(notification) => notifications2.send(notification),
-                        None => Ok(()),
-                    })
-                    .and_then(|_| Ok(()))
-                    .map_err(|e| panic!("Notification Send Error: {:#?}", e));
-
-                tokio::spawn(recv_msgs);
-
-                Ok(())
-            })
-            .map_err(|e| panic!("Socket Connect Error: {:#?}", e));
-
-        thread::spawn(move || {
-            tokio::run(run_client_socket);
-        });
-        WeaverClient {
-            commands,
-            core,
+        WeaverState {
+            commands_tx,
+            command_history,
             msgcounter,
         }
     }
-
     pub fn run_command(
         &mut self,
         cmd: String,
@@ -148,7 +71,105 @@ impl WeaverClient {
         self.msgcounter += 1;
         let id = self.msgcounter;
         let msg = ClientMessage { id, request };
-        self.commands.unbounded_send(msg)
+        self.commands_tx.unbounded_send(msg)
+    }
+}
+
+pub struct WeaverClient<'a> {
+    commands_rx: UnboundedReceiver<ClientMessage>,
+    socket_rx: MsgPackReader<'a, UnixStream, ServerMessage>,
+    socket_tx: MsgPackWriter<UnixStream, ClientMessage>,
+    pub state: Arc<RwLock<WeaverState>>,
+    pub notifications: Sender<WeaverNotification>,
+    overflow: Option<ClientMessage>,
+}
+
+impl<'a> WeaverClient<'a> {
+    pub fn new(notifications: Sender<WeaverNotification>) -> Self {
+        let (commands_tx, commands_rx): (
+            UnboundedSender<ClientMessage>,
+            UnboundedReceiver<ClientMessage>,
+        ) = unbounded();
+
+        let state = Arc::new(RwLock::new(WeaverState::new(commands_tx)));
+        let overflow = None;
+
+        let socketpath = weaver_socket_path();
+        let socket = UnixStream::connect(socketpath);
+        let (socket_rx, socket_tx): (
+            MsgPackReader<UnixStream, ServerMessage>,
+            MsgPackWriter<UnixStream, ClientMessage>,
+        ) = from_io(socket.expect("Could not connect to weaver daemon"));
+        //let socket_tx = socket_tx.sink_map_err(|e| println!("Send Err: {:#?}", e));
+        //let socket_rx = socket_rx.map_err(|e| panic!("Decode Error: {:#?}", e));
+
+        WeaverClient {
+            commands_rx,
+            socket_rx,
+            socket_tx,
+            notifications,
+            state,
+            overflow,
+        }
+    }
+
+    fn do_update(&mut self, msg: ServerMessage) -> Option<WeaverNotification> {
+        use weaver::ServerNotice::*;
+        let command_history = &mut self.state.write().unwrap().command_history;
+        match msg.notice {
+            CommandStarted(i, cmd) => {
+                let _ = command_history.insert(i, WeaverCommand::new(cmd));
+            }
+            CommandOutput(i, text) => command_history.get_mut(&i).unwrap().stdout.push_str(&text),
+            CommandErr(i, text) => command_history.get_mut(&i).unwrap().stderr.push_str(&text),
+            CommandCompleted(i, rv) => command_history.get_mut(&i).unwrap().status = Some(rv),
+        };
+        Some(WeaverNotification::Updated)
+    }
+}
+
+impl<'a> Future for WeaverClient<'a> {
+    type Item = ();
+    type Error = tokio_serde_msgpack::DecodeError;
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        if let Some(msg) = self.overflow.take() {
+            if let Ok(AsyncSink::NotReady(msg)) = self.socket_tx.start_send(msg) {
+                self.overflow = Some(msg);
+            }
+        }
+
+        if self.overflow == None {
+            const LINES_PER_TICK: usize = 10;
+            for i in 0..LINES_PER_TICK {
+                match self.commands_rx.poll().unwrap() {
+                    Async::Ready(Some(msg)) => {
+                        if let Ok(AsyncSink::NotReady(msg)) = self.socket_tx.start_send(msg) {
+                            self.overflow = Some(msg);
+                        }
+                        if i + 1 == LINES_PER_TICK {
+                            task::current().notify();
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        let _ = self.socket_tx.poll_complete();
+
+        while let Async::Ready(msg) = self.socket_rx.poll()? {
+            if let Some(msg) = msg {
+                self.notifications
+                    .send(WeaverNotification::Server(msg.clone())).unwrap();
+                match self.do_update(msg) {
+                    Some(notification) => self.notifications.send(notification).unwrap(),
+                    None => {},
+                };
+            } else {
+                return Ok(Async::Ready(()));
+            }
+        }
+        Ok(Async::NotReady)
     }
 }
 
@@ -156,21 +177,19 @@ struct WeaverTui {
     log: Shared<Text>,
     input: Shared<TextInput>,
     vbox: Shared<Linear>,
-    weaver: WeaverClient,
-    core: Shared<Arc<RwLock<WeaverClientCore>>>,
-    dbgcore: Shared<DbgDump<Arc<RwLock<WeaverClientCore>>>>,
+    state: Shared<WeaverState>,
 }
 
 impl WeaverTui {
-    fn new(weaver: WeaverClient) -> WeaverTui {
+    fn new(state: Arc<RwLock<WeaverState>>) -> WeaverTui {
         let log = shared(Text::new(vec![]));
         let input = shared(TextInput::new(""));
+        let state = state.into();
+        let dbgdump = shared(DbgDump::new(&state));
         // XXX Ugly hack D:
-        let core = shared(weaver.core.clone());
-        let dbgcore = shared(DbgDump::new(&core));
         let mut contentbox = Linear::hbox();
         contentbox.push(&log);
-        contentbox.push(&dbgcore);
+        contentbox.push(&dbgdump);
         let content = shared(contentbox);
         let mut mainbox = Linear::vbox();
         mainbox.push(&content);
@@ -180,15 +199,17 @@ impl WeaverTui {
             log,
             input,
             vbox,
-            weaver,
-            core,
-            dbgcore,
+            state,
         }
     }
 
     fn submit_input(&mut self) {
         let text = self.input.write().unwrap().submit();
-        self.weaver.run_command(text.clone()).unwrap();
+        self.state
+            .write()
+            .unwrap()
+            .run_command(text.clone())
+            .unwrap();
         let lines = text.lines();
         let mut log = self.log.write().unwrap();
         for line in lines {
@@ -226,7 +247,7 @@ impl App for WeaverTui {
                 _ => Ok(()),
             },
             Event::AppEvent(_) => {
-                //self.log_msg(&format!("{:?}", event));
+                self.log_msg(&format!("{:?}", event));
                 Ok(())
             }
         }
@@ -237,7 +258,10 @@ fn main() {
     let be = Backend::new();
     let sender = be.sender.clone();
     let weaver = WeaverClient::new(sender);
-    let mut app = WeaverTui::new(weaver);
+    let mut app = WeaverTui::new(weaver.state.clone());
+    thread::spawn(move || {
+        tokio::run(weaver.map_err(|e| panic!("Client Error: {:#?}", e)));
+    });
     app.log_msg("Esc to exit");
     be.run_app(&mut app);
 }
