@@ -2,6 +2,33 @@
 extern crate serde_derive;
 extern crate serde;
 
+use std::collections::BTreeMap;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CommandHistory(BTreeMap<usize, WeaverCommand>);
+
+impl CommandHistory {
+    pub fn do_update(&mut self, msg: ServerMessage) {
+        use ServerNotice::*;
+        match msg.notice {
+            CommandStarted(i, cmd) => {
+                let _ = self.0.insert(i, WeaverCommand::new(cmd));
+            }
+            CommandOutput(i, text) => self.0.get_mut(&i).unwrap().stdout.push_str(&text),
+            CommandErr(i, text) => self.0.get_mut(&i).unwrap().stderr.push_str(&text),
+            CommandCompleted(i, rv) => self.0.get_mut(&i).unwrap().status = Some(rv),
+        };
+    }
+
+    pub fn new() -> Self {
+        CommandHistory(BTreeMap::new())
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&usize, &WeaverCommand)> {
+        self.0.iter()
+    }
+}
+
 use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]

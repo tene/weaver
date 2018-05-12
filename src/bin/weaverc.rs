@@ -13,7 +13,6 @@ use text_ui::widget::Widget;
 use text_ui::widget::{shared, Line, Linear, Readline, Shared, Text};
 use text_ui::{text_to_lines, Event, Input, Key, Position, Size};
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
@@ -27,7 +26,7 @@ use tokio::prelude::{task, Async, Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
 use tokio_uds::UnixStream;
 
-use weaver::{weaver_socket_path, ClientMessage, ClientRequest, ServerMessage, WeaverCommand};
+use weaver::{weaver_socket_path, ClientMessage, ClientRequest, CommandHistory, ServerMessage};
 
 #[derive(Debug, PartialEq)]
 pub enum WeaverNotification {
@@ -36,7 +35,7 @@ pub enum WeaverNotification {
 }
 
 pub struct WeaverState {
-    pub command_history: BTreeMap<usize, WeaverCommand>,
+    pub command_history: CommandHistory,
     pub commands_tx: UnboundedSender<ClientMessage>,
     msgcounter: u32,
 }
@@ -51,7 +50,7 @@ impl fmt::Debug for WeaverState {
 
 impl WeaverState {
     pub fn new(commands_tx: UnboundedSender<ClientMessage>) -> Self {
-        let command_history = BTreeMap::new();
+        let command_history = CommandHistory::new();
         let msgcounter = 0;
         WeaverState {
             commands_tx,
@@ -117,16 +116,8 @@ impl<'a> WeaverClient<'a> {
     }
 
     fn do_update(&mut self, msg: ServerMessage) -> Option<WeaverNotification> {
-        use weaver::ServerNotice::*;
         let command_history = &mut self.state.write().unwrap().command_history;
-        match msg.notice {
-            CommandStarted(i, cmd) => {
-                let _ = command_history.insert(i, WeaverCommand::new(cmd));
-            }
-            CommandOutput(i, text) => command_history.get_mut(&i).unwrap().stdout.push_str(&text),
-            CommandErr(i, text) => command_history.get_mut(&i).unwrap().stderr.push_str(&text),
-            CommandCompleted(i, rv) => command_history.get_mut(&i).unwrap().status = Some(rv),
-        };
+        command_history.do_update(msg);
         Some(WeaverNotification::Updated)
     }
 }
@@ -186,7 +177,8 @@ impl Widget for WeaverStateWidget {
         let mut rv = vec![];
         let height = size.height as usize;
         let mut ctr: usize = 0;
-        for (_i, cmd) in self.state.read().unwrap().command_history.iter().rev() {
+        let state = self.state.read().unwrap();
+        for (_i, cmd) in state.command_history.iter().rev() {
             let status = match cmd.status {
                 None => '…',
                 Some(0) => '✔',
