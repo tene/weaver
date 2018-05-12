@@ -3,35 +3,60 @@ extern crate serde_derive;
 extern crate serde;
 
 use std::collections::BTreeMap;
+use std::iter::FromIterator;
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CommandHistory(BTreeMap<usize, WeaverCommand>);
+type CommandId = u32;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CommandHistory {
+    pub commands: BTreeMap<CommandId, WeaverCommand>,
+    next_index: CommandId,
+}
 
 impl CommandHistory {
     pub fn do_update(&mut self, msg: ServerMessage) {
         use ServerNotice::*;
         match msg.notice {
             CommandStarted(i, cmd) => {
-                let _ = self.0.insert(i, WeaverCommand::new(cmd));
+                let _ = self.commands.insert(i, WeaverCommand::new(cmd));
             }
-            CommandOutput(i, text) => self.0.get_mut(&i).unwrap().stdout.push_str(&text),
-            CommandErr(i, text) => self.0.get_mut(&i).unwrap().stderr.push_str(&text),
-            CommandCompleted(i, rv) => self.0.get_mut(&i).unwrap().status = Some(rv),
+            CommandOutput(i, text) => self.commands.get_mut(&i).unwrap().stdout.push_str(&text),
+            CommandErr(i, text) => self.commands.get_mut(&i).unwrap().stderr.push_str(&text),
+            CommandCompleted(i, rv) => self.commands.get_mut(&i).unwrap().status = Some(rv),
+            CommandsBulk(cmds) => {
+                let mut bulk = BTreeMap::from_iter(cmds.into_iter());
+                self.commands.append(&mut bulk);
+            }
         };
     }
 
     pub fn new() -> Self {
-        CommandHistory(BTreeMap::new())
+        let commands = BTreeMap::new();
+        let next_index = 1;
+        CommandHistory {
+            commands,
+            next_index,
+        }
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&usize, &WeaverCommand)> {
-        self.0.iter()
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&CommandId, &WeaverCommand)> {
+        self.commands.iter()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = (CommandId, WeaverCommand)> {
+        self.commands.into_iter()
+    }
+
+    pub fn next_index(&mut self) -> CommandId {
+        let rv = self.next_index;
+        self.next_index += 1;
+        rv
     }
 }
 
 use std::path::PathBuf;
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct WeaverCommand {
     pub cmd: String,
     pub stdout: String,
@@ -63,10 +88,11 @@ pub struct ClientMessage {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum ServerNotice {
-    CommandStarted(usize, String),
-    CommandOutput(usize, String),
-    CommandErr(usize, String),
-    CommandCompleted(usize, i32),
+    CommandsBulk(Vec<(CommandId, WeaverCommand)>),
+    CommandStarted(CommandId, String),
+    CommandOutput(CommandId, String),
+    CommandErr(CommandId, String),
+    CommandCompleted(CommandId, i32),
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
