@@ -1,11 +1,18 @@
 #[macro_use]
 extern crate serde_derive;
+extern crate futures;
 extern crate serde;
+extern crate tokio;
+extern crate tokio_serde_msgpack;
+extern crate tokio_uds;
 
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
 
-type CommandId = u32;
+pub mod client;
+pub use client::{WeaverClient, WeaverNotification, WeaverState};
+
+pub type CommandId = u32;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CommandHistory {
