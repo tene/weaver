@@ -25,32 +25,38 @@ struct WeaverStateWidget {
 
 fn render_command_summary(cmd: &WeaverCommand, width: usize) -> Pane {
     let mut pane = Pane::new_width(width);
-    let mut offset: usize = 0;
-    let status = match cmd.status {
-        None => '…',
-        Some(0) => '✔',
-        _ => '❌',
+    let (icon, style) = match cmd.status {
+        None => ('…', "command.running"),
+        Some(0) => ('✔', "command.success"),
+        _ => ('X', "command.failed"),
     };
-    let command_line = format!("{} {}", status, cmd.cmd.clone());
-    let command_line = text_to_lines(command_line, width as usize);
-    let pos = Position::new(0, offset as u16);
+    let status_pane = Pane::new_styled(
+        Position::new(0, 0),
+        Size::new(1, 1),
+        vec![icon.to_string()],
+        style,
+    );
+    pane.push_child(status_pane);
+    let subwidth = width - 1;
+    let command_line = text_to_lines(cmd.cmd.clone(), subwidth);
+    let pos = Position::new(1, 0);
     let textlen = command_line.len();
-    offset += textlen;
-    let size = Size::new(width as u16, textlen as u16);
+    let mut offset = textlen;
+    let size = Size::new(subwidth as u16, textlen as u16);
     pane.push_child(Pane::new_styled(pos, size, command_line, "command"));
     if cmd.stdout.len() > 0 {
-        let stdout = text_to_lines(cmd.stdout.clone(), size.width as usize);
-        let pos = Position::new(0, offset as u16);
+        let stdout = text_to_lines(cmd.stdout.clone(), subwidth);
+        let pos = Position::new(1, offset as u16);
         let textlen = stdout.len();
         offset += textlen;
-        let size = Size::new(width as u16, textlen as u16);
+        let size = Size::new(subwidth as u16, textlen as u16);
         pane.push_child(Pane::new_styled(pos, size, stdout, "stdout"));
     }
     if cmd.stderr.len() > 0 {
-        let stderr = text_to_lines(cmd.stderr.clone(), size.width as usize);
-        let pos = Position::new(0, offset as u16);
+        let stderr = text_to_lines(cmd.stderr.clone(), subwidth);
+        let pos = Position::new(1, offset as u16);
         let textlen = stderr.len();
-        let size = Size::new(width as u16, textlen as u16);
+        let size = Size::new(subwidth as u16, textlen as u16);
         pane.push_child(Pane::new_styled(pos, size, stderr, "stderr"));
     }
     pane
@@ -189,6 +195,15 @@ impl App for WeaverTui {
             "command" => (None, Some(Box::new(color::Rgb(16, 16, 32)))),
             "stderr" => (None, Some(Box::new(color::Rgb(32, 16, 16)))),
             "input" => (None, Some(Box::new(color::Rgb(32, 32, 32)))),
+            "command.running" => (
+                Some(Box::new(color::LightYellow)),
+                Some(Box::new(color::Rgb(16, 16, 32))),
+            ),
+            "command.success" => (
+                Some(Box::new(color::LightGreen)),
+                Some(Box::new(color::Rgb(16, 16, 32))),
+            ),
+            "command.failed" => (Some(Box::new(color::LightRed)), None),
             _ => (None, None),
         }
     }
