@@ -1,9 +1,12 @@
 #[macro_use]
 extern crate serde_derive;
 extern crate futures;
+extern crate libc;
 extern crate serde;
 extern crate tokio;
+extern crate tokio_io;
 extern crate tokio_serde_msgpack;
+extern crate tokio_signal;
 extern crate tokio_uds;
 
 use std::collections::BTreeMap;
@@ -11,6 +14,8 @@ use std::iter::FromIterator;
 
 pub mod client;
 pub use client::{WeaverClient, WeaverNotification, WeaverState};
+
+pub mod process;
 
 pub type CommandId = u32;
 

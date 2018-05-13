@@ -2,26 +2,28 @@ extern crate futures;
 extern crate rmp_serde;
 extern crate tokio;
 extern crate tokio_io;
+//extern crate tokio_process;
 extern crate tokio_serde_msgpack;
 extern crate tokio_threadpool;
 extern crate tokio_uds;
 extern crate weaver;
 
-use futures::future::poll_fn;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::AsyncSink;
 
-use tokio::prelude::{task, Async, Future, Sink, Stream};
+use tokio::prelude::{task, Async, AsyncRead, Future, Sink, Stream};
 use tokio_serde_msgpack::{from_io, MsgPackReader, MsgPackWriter};
-use tokio_threadpool::blocking;
 use tokio_uds::{UnixListener, UnixStream};
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::io::BufReader;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, RwLock};
 
+use weaver::process::{stdio, Child, ChildStderr, ChildStdout};
 use weaver::{
-    weaver_socket_path, ClientMessage, ClientRequest, CommandHistory, ServerMessage, ServerNotice,
+    weaver_socket_path, ClientMessage, ClientRequest, CommandHistory, CommandId, ServerMessage,
+    ServerNotice,
 };
 
 type ClientID = u32;
@@ -132,46 +134,12 @@ impl<'a> Future for ClientConn<'a> {
                 match msg.request {
                     ClientRequest::RunCommand(c) => {
                         let cmd_idx = self.state.write().unwrap().command_history.next_index();
-                        send_notice(
-                            &broadcast,
-                            req_id,
-                            ServerNotice::CommandStarted(cmd_idx, c.clone()),
-                        );
-                        let run_command = poll_fn(move || {
-                            blocking(|| {
-                                Command::new("bash")
-                                    .arg("-c")
-                                    .arg(&c)
-                                    .output()
-                                    .expect("ERR: Failed to run command??")
-                            }).map_err(|e| panic!("Threadpool Problem: {:#?}", e))
-                        }).and_then(move |output| {
-                            send_notice(
-                                &broadcast,
-                                req_id,
-                                ServerNotice::CommandOutput(
-                                    cmd_idx,
-                                    String::from_utf8_lossy(&output.stdout).to_string(),
-                                ),
-                            );
-                            send_notice(
-                                &broadcast,
-                                req_id,
-                                ServerNotice::CommandErr(
-                                    cmd_idx,
-                                    String::from_utf8_lossy(&output.stderr).to_string(),
-                                ),
-                            );
-                            send_notice(
-                                &broadcast,
-                                req_id,
-                                ServerNotice::CommandCompleted(
-                                    cmd_idx,
-                                    output.status.code().unwrap(),
-                                ),
-                            );
-                            Ok(())
-                        });
+                        let mut cmd = Command::new("bash");
+                        cmd.arg("-c").arg(&c);
+                        send_notice(&broadcast, req_id, ServerNotice::CommandStarted(cmd_idx, c));
+
+                        let run_command = RunningCommand::new(cmd, broadcast, req_id, cmd_idx);
+
                         tokio::spawn(run_command);
                     }
                 }
@@ -186,6 +154,108 @@ impl<'a> Future for ClientConn<'a> {
 impl<'a> Drop for ClientConn<'a> {
     fn drop(&mut self) {
         self.state.write().unwrap().channels.remove(&self.id);
+    }
+}
+
+// XXX Maybe refactor this into Stream<ServerMessage>?
+pub struct RunningCommand {
+    child: Child,
+    broadcast: UnboundedSender<ServerMessage>,
+    stdout: BufReader<ChildStdout>,
+    stderr: BufReader<ChildStderr>,
+    buf: Vec<u8>,
+    request_id: u32,
+    command_id: CommandId,
+}
+
+// XXX Use tokio-process once fixed: https://github.com/alexcrichton/tokio-process/issues/29
+impl RunningCommand {
+    pub fn new(
+        mut cmd: Command,
+        broadcast: UnboundedSender<ServerMessage>,
+        request_id: u32,
+        command_id: CommandId,
+    ) -> Self {
+        let mut child = cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to execute child process");
+
+        let stdout = child.stdout.take().unwrap();
+        let stdout = stdio(stdout).unwrap();
+        let stdout = BufReader::new(stdout);
+
+        let stderr = child.stderr.take().unwrap();
+        let stderr = stdio(stderr).unwrap();
+        let stderr = BufReader::new(stderr);
+
+        let child = Child::new(child);
+
+        const CHUNK_SIZE: usize = 1024;
+        let buf = vec![0; CHUNK_SIZE];
+        RunningCommand {
+            child,
+            broadcast,
+            stdout,
+            stderr,
+            buf,
+            request_id,
+            command_id,
+        }
+    }
+}
+
+impl Future for RunningCommand {
+    type Item = ();
+    type Error = ();
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        const CHUNKS_PER_TICK: usize = 10;
+        for i in 0..CHUNKS_PER_TICK {
+            match self.stdout.poll_read(&mut self.buf).unwrap() {
+                Async::Ready(size) => {
+                    let text = String::from_utf8_lossy(&self.buf[..size]).to_string();
+                    send_notice(
+                        &self.broadcast,
+                        self.request_id,
+                        ServerNotice::CommandOutput(self.command_id, text),
+                    );
+                    if i + 1 == CHUNKS_PER_TICK {
+                        task::current().notify();
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        for i in 0..CHUNKS_PER_TICK {
+            match self.stderr.poll_read(&mut self.buf).unwrap() {
+                Async::Ready(size) => {
+                    let text = String::from_utf8_lossy(&self.buf[..size]).to_string();
+                    send_notice(
+                        &self.broadcast,
+                        self.request_id,
+                        ServerNotice::CommandErr(self.command_id, text),
+                    );
+                    if i + 1 == CHUNKS_PER_TICK {
+                        task::current().notify();
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        return match self.child.poll().unwrap() {
+            Async::Ready(status) => {
+                send_notice(
+                    &self.broadcast,
+                    self.request_id,
+                    ServerNotice::CommandCompleted(self.command_id, status.code().unwrap()),
+                );
+                Ok(Async::Ready(()))
+            }
+            _ => Ok(Async::NotReady),
+        };
     }
 }
 
