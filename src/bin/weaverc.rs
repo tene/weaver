@@ -6,7 +6,7 @@ extern crate tokio_uds;
 extern crate weaver;
 
 use text_ui::app::App;
-use text_ui::backend::Backend;
+use text_ui::backend::{color, Backend, Color};
 use text_ui::pane::Pane;
 //use text_ui::widget::DbgDump;
 use text_ui::widget::Widget;
@@ -17,46 +17,64 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 
 use tokio::prelude::Future;
-use weaver::{WeaverClient, WeaverNotification, WeaverState};
+use weaver::{WeaverClient, WeaverCommand, WeaverNotification, WeaverState};
 
 struct WeaverStateWidget {
     state: Shared<WeaverState>,
 }
 
+fn render_command_summary(cmd: &WeaverCommand, width: usize) -> Pane {
+    let mut pane = Pane::new_width(width);
+    let mut offset: usize = 0;
+    let status = match cmd.status {
+        None => '…',
+        Some(0) => '✔',
+        _ => '❌',
+    };
+    let command_line = format!("{} {}", status, cmd.cmd.clone());
+    let command_line = text_to_lines(command_line, width as usize);
+    let pos = Position::new(0, offset as u16);
+    let textlen = command_line.len();
+    offset += textlen;
+    let size = Size::new(width as u16, textlen as u16);
+    pane.push_child(Pane::new_styled(pos, size, command_line, "command"));
+    if cmd.stdout.len() > 0 {
+        let stdout = text_to_lines(cmd.stdout.clone(), size.width as usize);
+        let pos = Position::new(0, offset as u16);
+        let textlen = stdout.len();
+        offset += textlen;
+        let size = Size::new(width as u16, textlen as u16);
+        pane.push_child(Pane::new_styled(pos, size, stdout, "stdout"));
+    }
+    if cmd.stderr.len() > 0 {
+        let stderr = text_to_lines(cmd.stderr.clone(), size.width as usize);
+        let pos = Position::new(0, offset as u16);
+        let textlen = stderr.len();
+        let size = Size::new(width as u16, textlen as u16);
+        pane.push_child(Pane::new_styled(pos, size, stderr, "stderr"));
+    }
+    pane
+}
+
 impl Widget for WeaverStateWidget {
     fn render_children(&self, size: Size) -> Option<Vec<Pane>> {
-        let mut rv = vec![];
         let height = size.height as usize;
         let mut ctr: usize = 0;
         let state = self.state.read().unwrap();
+        let mut children: Vec<Pane> = vec![];
         for (_i, cmd) in state.command_history.iter().rev() {
-            let status = match cmd.status {
-                None => '…',
-                Some(0) => '✔',
-                _ => '❌',
-            };
-            let mut content = vec![];
-            let command_line = format!("{} {}", status, cmd.cmd.clone());
-            let command_line = text_to_lines(command_line, size.width as usize);
-            ctr += command_line.len();
-            content.extend(command_line);
-            if cmd.stdout.len() > 0 {
-                let stdout = text_to_lines(cmd.stdout.clone(), size.width as usize);
-                ctr += stdout.len();
-                content.extend(stdout);
-            }
+            let child = render_command_summary(cmd, size.width as usize);
+            let offset = child.size.height as usize;
+
+            ctr += offset;
             if ctr >= height {
-                let top_spill = ctr - height;
-                content = content.split_off(top_spill);
-                ctr = height;
-            }
-            let pos = Position::new(0, size.height - ctr as u16);
-            rv.push(Pane::new(pos, content));
-            if ctr == height {
+                // XXX Need to be able to clip the top of the overflow
                 break;
             }
+            let child = child.offset(Position::new(0, (height - ctr) as u16));
+            children.push(child);
         }
-        Some(rv)
+        Some(children)
     }
 }
 
@@ -163,6 +181,14 @@ impl App for WeaverTui {
                 self.log_msg(&format!("{:?}", event));
                 Ok(())
             }
+        }
+    }
+    fn style(&self, name: &str) -> (Option<Box<Color>>, Option<Box<Color>>) {
+        match name {
+            "command" => (None, Some(Box::new(color::Rgb(16, 16, 32)))),
+            "stderr" => (None, Some(Box::new(color::Rgb(32, 16, 16)))),
+            "input" => (None, Some(Box::new(color::Rgb(32, 32, 32)))),
+            _ => (None, None),
         }
     }
 }
