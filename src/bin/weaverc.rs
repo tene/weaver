@@ -152,6 +152,7 @@ impl WeaverTui {
     fn input(&mut self, key: Key) {
         match key {
             Key::Char('\n') => self.submit_input(),
+            Key::Alt('\r') => self.input.write().unwrap().process_key(Key::Char('\n')),
             k => self.input.write().unwrap().process_key(k),
         }
     }
