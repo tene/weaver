@@ -23,7 +23,7 @@ struct WeaverStateWidget {
     state: Shared<WeaverState>,
 }
 
-fn render_command_summary(cmd: &WeaverCommand, width: usize) -> Pane {
+fn render_command_summary(cmd: &WeaverCommand, width: usize, maxlines: usize) -> Pane {
     let mut pane = Pane::new_width(width);
     let (icon, style) = match cmd.status {
         None => ('…', "command.running"),
@@ -45,17 +45,25 @@ fn render_command_summary(cmd: &WeaverCommand, width: usize) -> Pane {
     let size = Size::new(subwidth as u16, textlen as u16);
     pane.push_child(Pane::new_styled(pos, size, command_line, "command"));
     if cmd.stdout.len() > 0 {
-        let stdout = text_to_lines(cmd.stdout.clone(), subwidth);
+        let mut stdout = text_to_lines(cmd.stdout.clone(), subwidth);
         let pos = Position::new(1, offset as u16);
-        let textlen = stdout.len();
+        let mut textlen = stdout.len();
+        if textlen > maxlines {
+            stdout = stdout.split_off(textlen - maxlines);
+            textlen = maxlines;
+        }
         offset += textlen;
         let size = Size::new(subwidth as u16, textlen as u16);
         pane.push_child(Pane::new_styled(pos, size, stdout, "stdout"));
     }
     if cmd.stderr.len() > 0 {
-        let stderr = text_to_lines(cmd.stderr.clone(), subwidth);
+        let mut stderr = text_to_lines(cmd.stderr.clone(), subwidth);
         let pos = Position::new(1, offset as u16);
-        let textlen = stderr.len();
+        let mut textlen = stderr.len();
+        if textlen > maxlines {
+            stderr = stderr.split_off(textlen - maxlines);
+            textlen = maxlines;
+        }
         let size = Size::new(subwidth as u16, textlen as u16);
         pane.push_child(Pane::new_styled(pos, size, stderr, "stderr"));
     }
@@ -69,7 +77,7 @@ impl Widget for WeaverStateWidget {
         let state = self.state.read().unwrap();
         let mut children: Vec<Pane> = vec![];
         for (_i, cmd) in state.command_history.iter().rev() {
-            let child = render_command_summary(cmd, size.width as usize);
+            let child = render_command_summary(cmd, size.width as usize, 10);
             let offset = child.size.height as usize;
 
             ctr += offset;
