@@ -29,6 +29,18 @@ impl WeaverStateWidget {
         let selected = None;
         WeaverStateWidget { state, selected }
     }
+
+    pub fn find_cmd_by_index(&self, i: usize) -> Option<String> {
+        let state = self.state.read().unwrap();
+        let rv = state
+            .command_history
+            .iter()
+            .rev()
+            .skip(i)
+            .next()
+            .map(|(_, cmd)| cmd.cmd.clone());
+        rv
+    }
 }
 
 fn render_command_summary(
@@ -269,12 +281,14 @@ impl WeaverTui {
 
     fn submit_input(&mut self) {
         let text = self.input.write().unwrap().finalize();
-        self.state
-            .write()
-            .unwrap()
-            .run_command(text.clone())
-            .unwrap();
-        self.statew.write().unwrap().selected = Some(0);
+        if text.len() > 0 {
+            self.state
+                .write()
+                .unwrap()
+                .run_command(text.clone())
+                .unwrap();
+        }
+        self.statew.write().unwrap().selected = None;
     }
 
     fn log_msg(&mut self, msg: &str) {
@@ -291,14 +305,22 @@ impl WeaverTui {
                 statew.selected = match statew.selected.take() {
                     None => Some(0),
                     Some(i) => Some(i + 1),
-                }
+                };
+                if let Some(cmd) = statew.find_cmd_by_index(statew.selected.unwrap() as usize) {
+                    self.input.write().unwrap().set_line(&cmd);
+                };
             }
             Key::Down => {
                 let mut statew = self.statew.write().unwrap();
                 statew.selected = match statew.selected.take() {
                     None => None,
                     Some(0) => None,
-                    Some(i) => Some(i - 1),
+                    Some(i) => {
+                        if let Some(cmd) = statew.find_cmd_by_index(i as usize - 1) {
+                            self.input.write().unwrap().set_line(&cmd);
+                        };
+                        Some(i - 1)
+                    }
                 }
             }
             k => self.input.write().unwrap().process_key(k),
