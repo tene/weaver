@@ -21,9 +21,22 @@ use weaver::{WeaverClient, WeaverCommand, WeaverNotification, WeaverState};
 
 struct WeaverStateWidget {
     state: Shared<WeaverState>,
+    selected: Option<u32>,
 }
 
-fn render_command_summary(cmd: &WeaverCommand, width: usize, maxlines: usize) -> Pane {
+impl WeaverStateWidget {
+    pub fn new(state: Shared<WeaverState>) -> Self {
+        let selected = None;
+        WeaverStateWidget { state, selected }
+    }
+}
+
+fn render_command_summary(
+    cmd: &WeaverCommand,
+    width: usize,
+    maxlines: usize,
+    selected: bool,
+) -> Pane {
     let mut pane = Pane::new_width(width);
     let (icon, style) = match cmd.status {
         None => ('…', "command.running"),
@@ -43,7 +56,16 @@ fn render_command_summary(cmd: &WeaverCommand, width: usize, maxlines: usize) ->
     let textlen = command_line.len();
     let mut offset = textlen;
     let size = Size::new(subwidth as u16, textlen as u16);
-    pane.push_child(Pane::new_styled(pos, size, command_line, "command"));
+    let prefix = match selected {
+        true => "selected.",
+        false => "",
+    };
+    pane.push_child(Pane::new_styled(
+        pos,
+        size,
+        command_line,
+        &format!("{}command", prefix),
+    ));
     if cmd.stdout.len() > 0 {
         let mut stdout = text_to_lines(cmd.stdout.clone(), subwidth);
         let pos = Position::new(1, offset as u16);
@@ -54,7 +76,12 @@ fn render_command_summary(cmd: &WeaverCommand, width: usize, maxlines: usize) ->
         }
         offset += textlen;
         let size = Size::new(subwidth as u16, textlen as u16);
-        pane.push_child(Pane::new_styled(pos, size, stdout, "stdout"));
+        pane.push_child(Pane::new_styled(
+            pos,
+            size,
+            stdout,
+            &format!("{}stdout", prefix),
+        ));
     }
     if cmd.stderr.len() > 0 {
         let mut stderr = text_to_lines(cmd.stderr.clone(), subwidth);
@@ -65,7 +92,77 @@ fn render_command_summary(cmd: &WeaverCommand, width: usize, maxlines: usize) ->
             textlen = maxlines;
         }
         let size = Size::new(subwidth as u16, textlen as u16);
-        pane.push_child(Pane::new_styled(pos, size, stderr, "stderr"));
+        pane.push_child(Pane::new_styled(
+            pos,
+            size,
+            stderr,
+            &format!("{}stderr", prefix),
+        ));
+    }
+    pane
+}
+
+fn render_command_detail(cmd: &WeaverCommand, size: Size) -> Pane {
+    let mut pane = Pane::new_width(size.width as usize);
+    let (icon, style) = match cmd.status {
+        None => ('…', "command.running"),
+        Some(0) => ('✔', "command.success"),
+        _ => ('X', "command.failed"),
+    };
+    let status_pane = Pane::new_styled(
+        Position::new(0, 0),
+        Size::new(1, 1),
+        vec![icon.to_string()],
+        style,
+    );
+    pane.push_child(status_pane);
+    let subwidth: usize = size.width as usize - 1;
+    let command_line = text_to_lines(cmd.cmd.clone(), subwidth);
+    let pos = Position::new(1, 0);
+    let textlen = command_line.len();
+    let mut offset = textlen;
+    let pane_size = Size::new(subwidth as u16, textlen as u16);
+    let prefix = "selected.";
+    let mut maxlines = size.height as usize - textlen;
+    pane.push_child(Pane::new_styled(
+        pos,
+        pane_size,
+        command_line,
+        &format!("{}command", prefix),
+    ));
+    if cmd.stdout.len() > 0 {
+        let mut stdout = text_to_lines(cmd.stdout.clone(), subwidth);
+        let pos = Position::new(1, offset as u16);
+        let mut textlen = stdout.len();
+        if textlen > maxlines {
+            stdout = stdout.split_off(textlen - maxlines);
+            textlen = maxlines;
+        }
+        maxlines -= textlen;
+        offset += textlen;
+        let pane_size = Size::new(subwidth as u16, textlen as u16);
+        pane.push_child(Pane::new_styled(
+            pos,
+            pane_size,
+            stdout,
+            &format!("{}stdout", prefix),
+        ));
+    }
+    if cmd.stderr.len() > 0 {
+        let mut stderr = text_to_lines(cmd.stderr.clone(), subwidth);
+        let pos = Position::new(1, offset as u16);
+        let mut textlen = stderr.len();
+        if textlen > maxlines {
+            stderr = stderr.split_off(textlen - maxlines);
+            textlen = maxlines;
+        }
+        let pane_size = Size::new(subwidth as u16, textlen as u16);
+        pane.push_child(Pane::new_styled(
+            pos,
+            pane_size,
+            stderr,
+            &format!("{}stderr", prefix),
+        ));
     }
     pane
 }
@@ -76,24 +173,40 @@ impl Widget for WeaverStateWidget {
         let mut ctr: usize = 0;
         let state = self.state.read().unwrap();
         let mut children: Vec<Pane> = vec![];
+        let mut i = 0;
+        let child_width: usize = match self.selected {
+            None => size.width as usize,
+            Some(_) => size.width as usize / 2,
+        };
         for (_i, cmd) in state.command_history.iter().rev() {
-            let mut child = render_command_summary(cmd, size.width as usize, 10);
+            let selected: bool = match self.selected {
+                None => false,
+                Some(idx) => idx == i,
+            };
+            let mut child = render_command_summary(cmd, child_width, 10, selected);
             let offset = child.size.height as usize;
 
             ctr += offset;
             if ctr >= height {
                 let spillover = (ctr - height) as u16;
                 let clip_pos = Position::new(0, spillover);
-                let clip_size = Size::new(size.width, child.size.height - spillover);
+                let clip_size = Size::new(child_width as u16, child.size.height - spillover);
                 child = child.clip(clip_pos, clip_size).unwrap();
                 child.position = Position::new(0, 0);
                 ctr = height;
             }
             let child = child.offset(Position::new(0, (height - ctr) as u16));
             children.push(child);
+            if selected {
+                let child_pos = Position::new(child_width as u16, 0);
+                let child_size = Size::new(size.width - (child_width as u16), size.height);
+                let child = render_command_detail(cmd, child_size).offset(child_pos);
+                children.push(child);
+            }
             if ctr == height {
                 break;
             }
+            i += 1;
         }
         Some(children)
     }
@@ -114,9 +227,7 @@ impl WeaverTui {
         let log = shared(Text::new(vec![]));
         let input = shared(Readline::new());
         let state: Shared<WeaverState> = state.into();
-        let statew = shared(WeaverStateWidget {
-            state: state.clone(),
-        });
+        let statew = shared(WeaverStateWidget::new(state.clone()));
         //let dbgdump = shared(DbgDump::new(&state));
         let show_debug = false;
         let mut contentbox = Linear::hbox();
@@ -163,6 +274,7 @@ impl WeaverTui {
             .unwrap()
             .run_command(text.clone())
             .unwrap();
+        self.statew.write().unwrap().selected = Some(0);
     }
 
     fn log_msg(&mut self, msg: &str) {
@@ -174,6 +286,21 @@ impl WeaverTui {
         match key {
             Key::Char('\n') => self.submit_input(),
             Key::Alt('\r') => self.input.write().unwrap().process_key(Key::Char('\n')),
+            Key::Up => {
+                let mut statew = self.statew.write().unwrap();
+                statew.selected = match statew.selected.take() {
+                    None => Some(0),
+                    Some(i) => Some(i + 1),
+                }
+            }
+            Key::Down => {
+                let mut statew = self.statew.write().unwrap();
+                statew.selected = match statew.selected.take() {
+                    None => None,
+                    Some(0) => None,
+                    Some(i) => Some(i - 1),
+                }
+            }
             k => self.input.write().unwrap().process_key(k),
         }
     }
@@ -209,6 +336,7 @@ impl App for WeaverTui {
         match name {
             "command" => (None, Some(Box::new(color::Rgb(16, 16, 32)))),
             "stderr" => (None, Some(Box::new(color::Rgb(32, 16, 16)))),
+            "stdout" => (None, Some(Box::new(color::Rgb(16, 32, 16)))),
             "input" => (None, Some(Box::new(color::Rgb(32, 32, 32)))),
             "command.running" => (
                 Some(Box::new(color::LightYellow)),
@@ -219,6 +347,27 @@ impl App for WeaverTui {
                 Some(Box::new(color::Rgb(16, 16, 32))),
             ),
             "command.failed" => (Some(Box::new(color::LightRed)), None),
+            "selected.command" => (
+                Some(Box::new(color::LightWhite)),
+                Some(Box::new(color::Rgb(32, 32, 128))),
+            ),
+            "selected.stderr" => (
+                Some(Box::new(color::LightWhite)),
+                Some(Box::new(color::Rgb(64, 16, 16))),
+            ),
+            "selected.stdout" => (
+                Some(Box::new(color::LightWhite)),
+                Some(Box::new(color::Rgb(16, 64, 16))),
+            ),
+            "selected.command.running" => (
+                Some(Box::new(color::LightYellow)),
+                Some(Box::new(color::Rgb(16, 16, 32))),
+            ),
+            "selected.command.success" => (
+                Some(Box::new(color::LightGreen)),
+                Some(Box::new(color::Rgb(16, 16, 32))),
+            ),
+            "selected.command.failed" => (Some(Box::new(color::LightRed)), None),
             _ => (None, None),
         }
     }
