@@ -77,16 +77,23 @@ impl Widget for WeaverStateWidget {
         let state = self.state.read().unwrap();
         let mut children: Vec<Pane> = vec![];
         for (_i, cmd) in state.command_history.iter().rev() {
-            let child = render_command_summary(cmd, size.width as usize, 10);
+            let mut child = render_command_summary(cmd, size.width as usize, 10);
             let offset = child.size.height as usize;
 
             ctr += offset;
             if ctr >= height {
-                // XXX Need to be able to clip the top of the overflow
-                break;
+                let spillover = (ctr - height) as u16;
+                let clip_pos = Position::new(0, spillover);
+                let clip_size = Size::new(size.width, child.size.height - spillover);
+                child = child.clip(clip_pos, clip_size).unwrap();
+                child.position = Position::new(0, 0);
+                ctr = height;
             }
             let child = child.offset(Position::new(0, (height - ctr) as u16));
             children.push(child);
+            if ctr == height {
+                break;
+            }
         }
         Some(children)
     }

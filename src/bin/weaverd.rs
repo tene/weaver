@@ -56,6 +56,7 @@ pub struct ClientConn<'a> {
 }
 
 fn send_notice(chan: &UnboundedSender<ServerMessage>, id: u32, notice: ServerNotice) {
+    println!("{:#?}", notice);
     let msg = ServerMessage { id, notice };
     let _ = chan.unbounded_send(msg);
 }
@@ -214,12 +215,14 @@ impl Future for RunningCommand {
         for i in 0..CHUNKS_PER_TICK {
             match self.stdout.poll_read(&mut self.buf).unwrap() {
                 Async::Ready(size) => {
-                    let text = String::from_utf8_lossy(&self.buf[..size]).to_string();
-                    send_notice(
-                        &self.broadcast,
-                        self.request_id,
-                        ServerNotice::CommandOutput(self.command_id, text),
-                    );
+                    if size > 0 {
+                        let text = String::from_utf8_lossy(&self.buf[..size]).to_string();
+                        send_notice(
+                            &self.broadcast,
+                            self.request_id,
+                            ServerNotice::CommandOutput(self.command_id, text),
+                        );
+                    }
                     if i + 1 == CHUNKS_PER_TICK {
                         task::current().notify();
                     }
@@ -231,12 +234,14 @@ impl Future for RunningCommand {
         for i in 0..CHUNKS_PER_TICK {
             match self.stderr.poll_read(&mut self.buf).unwrap() {
                 Async::Ready(size) => {
-                    let text = String::from_utf8_lossy(&self.buf[..size]).to_string();
-                    send_notice(
-                        &self.broadcast,
-                        self.request_id,
-                        ServerNotice::CommandErr(self.command_id, text),
-                    );
+                    if size > 0 {
+                        let text = String::from_utf8_lossy(&self.buf[..size]).to_string();
+                        send_notice(
+                            &self.broadcast,
+                            self.request_id,
+                            ServerNotice::CommandErr(self.command_id, text),
+                        );
+                    }
                     if i + 1 == CHUNKS_PER_TICK {
                         task::current().notify();
                     }
