@@ -315,12 +315,13 @@ impl WeaverTui {
                 statew.selected = match statew.selected.take() {
                     None => None,
                     Some(0) => None,
-                    Some(i) => {
-                        if let Some(cmd) = statew.find_cmd_by_index(i as usize - 1) {
-                            self.input.write().unwrap().set_line(&cmd);
-                        };
-                        Some(i - 1)
-                    }
+                    Some(i) => Some(i - 1),
+                };
+                match statew.selected {
+                    Some(i) => if let Some(cmd) = statew.find_cmd_by_index(i as usize) {
+                        self.input.write().unwrap().set_line(&cmd);
+                    },
+                    None => self.input.write().unwrap().set_line(""),
                 }
             }
             k => self.input.write().unwrap().process_key(k),
