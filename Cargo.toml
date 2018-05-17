@@ -10,16 +10,18 @@ tokio-io = "0.1.6"
 tokio-threadpool = "0.1.3"
 #tokio-process = "0.1.6"
 tokio-signal = "0.2"
-mio = "0.6.14"
+mio = "0.6"
+mio-uds = "0.6.6"
 libc = "0.2"
 serde_derive = "1.0"
 futures = "0.1.21"
 serde = "1.0"
 rmp-serde = "0.13"
 
+
 [dependencies.tokio-uds]
-git = 'https://github.com/Marwes/tokio-uds'
-branch = 'only_tokio_upgrade'
+git = 'https://github.com/tokio-rs/tokio-uds'
+#Expecting new release soon that should be usable with tokio 0.2
 
 [dependencies.tokio-serde-msgpack]
 path = '../tokio-serde-msgpack'

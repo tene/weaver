@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 
@@ -56,12 +57,16 @@ impl WeaverState {
         let msg = ClientMessage { id, request };
         self.commands_tx.unbounded_send(msg)
     }
+
+    fn do_update(&mut self, msg: ServerMessage) -> Option<WeaverNotification> {
+        self.command_history.do_update(msg);
+        Some(WeaverNotification::Updated)
+    }
 }
 
 pub struct WeaverClient<'a> {
     commands_rx: UnboundedReceiver<ClientMessage>,
-    socket_rx: MsgPackReader<'a, UnixStream, ServerMessage>,
-    socket_tx: MsgPackWriter<UnixStream, ClientMessage>,
+    connection: WeaverClientConnectionState<'a>,
     pub state: Arc<RwLock<WeaverState>>,
     pub notifications: Sender<WeaverNotification>,
     overflow: Option<ClientMessage>,
@@ -79,27 +84,65 @@ impl<'a> WeaverClient<'a> {
 
         let socketpath = weaver_socket_path();
         let socket = UnixStream::connect(socketpath);
-        let (socket_rx, socket_tx): (
-            MsgPackReader<UnixStream, ServerMessage>,
-            MsgPackWriter<UnixStream, ClientMessage>,
-        ) = from_io(socket.expect("Could not connect to weaver daemon"));
+        let connection = WeaverClientConnectionState::Pending(Box::new(socket));
         //let socket_tx = socket_tx.sink_map_err(|e| println!("Send Err: {:#?}", e));
         //let socket_rx = socket_rx.map_err(|e| panic!("Decode Error: {:#?}", e));
 
         WeaverClient {
             commands_rx,
-            socket_rx,
-            socket_tx,
+            connection,
             notifications,
             state,
             overflow,
         }
     }
 
-    fn do_update(&mut self, msg: ServerMessage) -> Option<WeaverNotification> {
+    fn _do_update(&mut self, msg: ServerMessage) -> Option<WeaverNotification> {
         let command_history = &mut self.state.write().unwrap().command_history;
         command_history.do_update(msg);
         Some(WeaverNotification::Updated)
+    }
+}
+
+enum WeaverClientConnectionState<'a> {
+    Pending(Box<Future<Item = UnixStream, Error = io::Error> + Send>),
+    Connected(
+        MsgPackReader<'a, UnixStream, ServerMessage>,
+        MsgPackWriter<UnixStream, ClientMessage>,
+    ),
+    Failed(io::Error),
+}
+
+impl<'a> WeaverClientConnectionState<'a> {
+    pub fn try_connect(
+        &mut self,
+    ) -> Result<
+        Async<(
+            &mut MsgPackReader<'a, UnixStream, ServerMessage>,
+            &mut MsgPackWriter<UnixStream, ClientMessage>,
+        )>,
+        &io::Error,
+    > {
+        use self::WeaverClientConnectionState::*;
+        match self {
+            Pending(socket) => match socket.poll() {
+                Ok(Async::Ready(socket)) => {
+                    let (mut reader, mut writer): (
+                        MsgPackReader<UnixStream, ServerMessage>,
+                        MsgPackWriter<UnixStream, ClientMessage>,
+                    ) = from_io(socket);
+                    *self = Connected(reader, writer);
+                    self.try_connect()
+                }
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(err) => {
+                    *self = Failed(err);
+                    self.try_connect()
+                }
+            },
+            Connected(reader, writer) => Ok(Async::Ready((reader, writer))),
+            Failed(err) => Err(err),
+        }
     }
 }
 
@@ -107,8 +150,15 @@ impl<'a> Future for WeaverClient<'a> {
     type Item = ();
     type Error = DecodeError;
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        let connection = &mut self.connection;
+        let (socket_rx, socket_tx) = match connection.try_connect() {
+            Ok(Async::Ready(pair)) => pair,
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Err(err) => panic!("Could not connect to weaver daemon: {:#?}", err),
+        };
+
         if let Some(msg) = self.overflow.take() {
-            if let Ok(AsyncSink::NotReady(msg)) = self.socket_tx.start_send(msg) {
+            if let Ok(AsyncSink::NotReady(msg)) = socket_tx.start_send(msg) {
                 self.overflow = Some(msg);
             }
         }
@@ -118,7 +168,7 @@ impl<'a> Future for WeaverClient<'a> {
             for i in 0..LINES_PER_TICK {
                 match self.commands_rx.poll().unwrap() {
                     Async::Ready(Some(msg)) => {
-                        if let Ok(AsyncSink::NotReady(msg)) = self.socket_tx.start_send(msg) {
+                        if let Ok(AsyncSink::NotReady(msg)) = socket_tx.start_send(msg) {
                             self.overflow = Some(msg);
                         }
                         if i + 1 == LINES_PER_TICK {
@@ -130,14 +180,14 @@ impl<'a> Future for WeaverClient<'a> {
             }
         }
 
-        let _ = self.socket_tx.poll_complete();
+        let _ = socket_tx.poll_complete();
 
-        while let Async::Ready(msg) = self.socket_rx.poll()? {
+        while let Async::Ready(msg) = socket_rx.poll()? {
             if let Some(msg) = msg {
                 self.notifications
                     .send(WeaverNotification::Server(msg.clone()))
                     .unwrap();
-                match self.do_update(msg) {
+                match self.state.write().unwrap().do_update(msg) {
                     Some(notification) => self.notifications.send(notification).unwrap(),
                     None => {}
                 };
