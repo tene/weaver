@@ -21,7 +21,7 @@ use weaver::{WeaverClient, WeaverCommand, WeaverNotification, WeaverState};
 
 struct WeaverStateWidget {
     state: Shared<WeaverState>,
-    selected: Option<u32>,
+    selected: Option<usize>,
 }
 
 impl WeaverStateWidget {
@@ -67,7 +67,7 @@ fn render_command_summary(
     let pos = Position::new(1, 0);
     let textlen = command_line.len();
     let mut offset = textlen;
-    let size = Size::new(subwidth as u16, textlen as u16);
+    let size = Size::new(subwidth, textlen);
     let prefix = match selected {
         true => "selected.",
         false => "",
@@ -80,14 +80,14 @@ fn render_command_summary(
     ));
     if cmd.stdout.len() > 0 {
         let mut stdout = text_to_lines(cmd.stdout.clone(), subwidth);
-        let pos = Position::new(1, offset as u16);
+        let pos = Position::new(1, offset);
         let mut textlen = stdout.len();
         if textlen > maxlines {
             stdout = stdout.split_off(textlen - maxlines);
             textlen = maxlines;
         }
         offset += textlen;
-        let size = Size::new(subwidth as u16, textlen as u16);
+        let size = Size::new(subwidth, textlen);
         pane.push_child(Pane::new_styled(
             pos,
             size,
@@ -97,13 +97,13 @@ fn render_command_summary(
     }
     if cmd.stderr.len() > 0 {
         let mut stderr = text_to_lines(cmd.stderr.clone(), subwidth);
-        let pos = Position::new(1, offset as u16);
+        let pos = Position::new(1, offset);
         let mut textlen = stderr.len();
         if textlen > maxlines {
             stderr = stderr.split_off(textlen - maxlines);
             textlen = maxlines;
         }
-        let size = Size::new(subwidth as u16, textlen as u16);
+        let size = Size::new(subwidth, textlen);
         pane.push_child(Pane::new_styled(
             pos,
             size,
@@ -115,7 +115,7 @@ fn render_command_summary(
 }
 
 fn render_command_detail(cmd: &WeaverCommand, size: Size) -> Pane {
-    let mut pane = Pane::new_width(size.width as usize);
+    let mut pane = Pane::new_width(size.width);
     let (icon, style) = match cmd.status {
         None => ('…', "command.running"),
         Some(0) => ('✔', "command.success"),
@@ -128,14 +128,14 @@ fn render_command_detail(cmd: &WeaverCommand, size: Size) -> Pane {
         style,
     );
     pane.push_child(status_pane);
-    let subwidth: usize = size.width as usize - 1;
+    let subwidth: usize = size.width - 1;
     let command_line = text_to_lines(cmd.cmd.clone(), subwidth);
     let pos = Position::new(1, 0);
     let textlen = command_line.len();
     let mut offset = textlen;
-    let pane_size = Size::new(subwidth as u16, textlen as u16);
+    let pane_size = Size::new(subwidth, textlen);
     let prefix = "selected.";
-    let mut maxlines = size.height as usize - textlen;
+    let mut maxlines = size.height - textlen;
     pane.push_child(Pane::new_styled(
         pos,
         pane_size,
@@ -144,7 +144,7 @@ fn render_command_detail(cmd: &WeaverCommand, size: Size) -> Pane {
     ));
     if cmd.stdout.len() > 0 {
         let mut stdout = text_to_lines(cmd.stdout.clone(), subwidth);
-        let pos = Position::new(1, offset as u16);
+        let pos = Position::new(1, offset);
         let mut textlen = stdout.len();
         if textlen > maxlines {
             stdout = stdout.split_off(textlen - maxlines);
@@ -152,7 +152,7 @@ fn render_command_detail(cmd: &WeaverCommand, size: Size) -> Pane {
         }
         maxlines -= textlen;
         offset += textlen;
-        let pane_size = Size::new(subwidth as u16, textlen as u16);
+        let pane_size = Size::new(subwidth, textlen);
         pane.push_child(Pane::new_styled(
             pos,
             pane_size,
@@ -162,13 +162,13 @@ fn render_command_detail(cmd: &WeaverCommand, size: Size) -> Pane {
     }
     if cmd.stderr.len() > 0 {
         let mut stderr = text_to_lines(cmd.stderr.clone(), subwidth);
-        let pos = Position::new(1, offset as u16);
+        let pos = Position::new(1, offset);
         let mut textlen = stderr.len();
         if textlen > maxlines {
             stderr = stderr.split_off(textlen - maxlines);
             textlen = maxlines;
         }
-        let pane_size = Size::new(subwidth as u16, textlen as u16);
+        let pane_size = Size::new(subwidth, textlen);
         pane.push_child(Pane::new_styled(
             pos,
             pane_size,
@@ -181,14 +181,14 @@ fn render_command_detail(cmd: &WeaverCommand, size: Size) -> Pane {
 
 impl Widget for WeaverStateWidget {
     fn render_children(&self, size: Size) -> Option<Vec<Pane>> {
-        let height = size.height as usize;
+        let height = size.height;
         let mut ctr: usize = 0;
         let state = self.state.read().unwrap();
         let mut children: Vec<Pane> = vec![];
         let mut i = 0;
         let child_width: usize = match self.selected {
-            None => size.width as usize,
-            Some(_) => size.width as usize / 2,
+            None => size.width,
+            Some(_) => size.width / 2,
         };
         for (_i, cmd) in state.command_history.iter().rev() {
             let selected: bool = match self.selected {
@@ -196,22 +196,22 @@ impl Widget for WeaverStateWidget {
                 Some(idx) => idx == i,
             };
             let mut child = render_command_summary(cmd, child_width, 10, selected);
-            let offset = child.size.height as usize;
+            let offset = child.size.height;
 
             ctr += offset;
             if ctr >= height {
-                let spillover = (ctr - height) as u16;
+                let spillover = ctr - height;
                 let clip_pos = Position::new(0, spillover);
-                let clip_size = Size::new(child_width as u16, child.size.height - spillover);
+                let clip_size = Size::new(child_width, child.size.height - spillover);
                 child = child.clip(clip_pos, clip_size).unwrap();
                 child.position = Position::new(0, 0);
                 ctr = height;
             }
-            let child = child.offset(Position::new(0, (height - ctr) as u16));
+            let child = child.offset(Position::new(0, height - ctr));
             children.push(child);
             if selected {
-                let child_pos = Position::new(child_width as u16, 0);
-                let child_size = Size::new(size.width - (child_width as u16), size.height);
+                let child_pos = Position::new(child_width, 0);
+                let child_size = Size::new(size.width - child_width, size.height);
                 let child = render_command_detail(cmd, child_size).offset(child_pos);
                 children.push(child);
             }
@@ -306,7 +306,7 @@ impl WeaverTui {
                     None => Some(0),
                     Some(i) => Some(i + 1),
                 };
-                if let Some(cmd) = statew.find_cmd_by_index(statew.selected.unwrap() as usize) {
+                if let Some(cmd) = statew.find_cmd_by_index(statew.selected.unwrap()) {
                     self.input.write().unwrap().set_line(&cmd);
                 };
             }
@@ -318,7 +318,7 @@ impl WeaverTui {
                     Some(i) => Some(i - 1),
                 };
                 match statew.selected {
-                    Some(i) => if let Some(cmd) = statew.find_cmd_by_index(i as usize) {
+                    Some(i) => if let Some(cmd) = statew.find_cmd_by_index(i) {
                         self.input.write().unwrap().set_line(&cmd);
                     },
                     None => self.input.write().unwrap().set_line(""),
