@@ -1,17 +1,53 @@
-Weaver is an attempt at a high-level reimagining of the entire stack involved in the terminal, the shell, ssh, and everything involved in command-line interactions with network computers.
+# Weaver
 
-The general goal for weaver is to interact at a higher level with a single local program that runs commands on your behalf on many systems, both local and remote.  No more copying your shell files all over the world, no more discrepancies between local and remote accounts, or between users you've logged in as.  No more fighting about default shell configuration on shared admin accounts (root).  No more trying to arrange for your preferred shell to be installed on every system you ever use.  All shell parsing, logic, alias expansion, and extensions happen in a single local program, and input is compiled and interpreted into a representation of commands to be run on some host, and then Weaver takes care of arranging for the command to be run wherever appropriate.  You can keep records of all commands run and shell history in one place, rather than scattered across shell history files on N hosts and M users.
+Weaver is my attempt at a modern reimagining of the command-line, the shell, the terminal, tmux/screen, and ssh.
 
-I plan to explore a variety of divergence from the traditional terminal and shell interaction model.  My first path of exploration here is a dedicated input text entry field, rather than mixing input and output into the same document.  This also opens up a variety of other affordances into interacting with program execution.  For example, you don't need to wait for program execution to complete before invoking another program.  You could launch a long-running grep in the background, and have it just add an entry to a monitoring or notification area showing progress, lines of output, completion, succcess/failure.  You can have all program output that's over a page long be automatically folded into a pager, and this output can be retained for later review on interaction with the program execution record in the history, rather than the fixed plain-text buffer of traditional shells.
+Very little is currently implemented.  I'm currently impelmenting the server and client in Rust, partly out of personal preference, and partly out of interest in ensuring my ability to keep resource usage respectfully low, especially memory.
 
-I'd like to explore the space of programs that have the capability to run on and access data on all hosts you're logged into.  For example, copying files to or from your local system and the far end of a chain of ssh connections through bridge hosts.  With the traditional model, where each separate ssh invocation knows nothing about any of the others doesn't offer many capabilities to handle this use case.
+Here's a mediocre example of the current state of the project (2018-05-17), to illustrate the general idea of the interaction model I have in mind.
 
-I'd like to evaluate some divergences from the behaviour of traditional shells.  Some of this has certainly been explored with other shells, but it may be fun to explore myself, rather than reimplementing bash.
+![Weaver Example](./weaverc-example.gif?raw=true)
 
-For now, I'm prototyping this with a TUI interface, but I plan to also experiment with a native GUI eventually, probably EFL.
+Some of my goals and aspirations for the project include the following.  I'm not particularly set on any specific details here, and I expect to change my mind about quite a bit as I implement and actually start using it.
 
-I plan to try a few different models for handling command execution on remote hosts.  Sending text to a shell's stdin is certainly feasible, and will be my first pass, but there are some difficulties there and a few things tricky to get quite right.  I'd like to use this as an excuse to try cloud-haskell, and experiment with a mode that copies Weaver (or a subset) into the remote host and runs it there.  This is clearly a terrible idea for a variety of reasons, but would be fun to try.
+# Features
+* Accept input in a separate text entry, rather than mixing it into the command history buffer.
+* Display process execution, status, and output in interactive UI widgets, instead of a flat text buffer.
+* Commands run concurrently; no need to wait for one command to finish before starting another.
+* Default to showing just the last (maybe also first?) few lines of output.
+* Easily pin persistent running commands (either continually producing output, like tail, or run repeatedly, like watch) to a place on the screen to monitor while you work.
+* Interactively select commands from history to see full output, and optionally additional details like time started, time finished, resource usage during execution, exit status, anything else I'm able to record.
+* Manage different sessions/windows/groups of command history, like tmux and screen.  Dedicate differnt regions of the display to arbitrary sets of command history.
+* All meaningful state is kept in a daemon, viewed by different clients.  Initially just a TUI client, but GUI clients are also planned.
+* Store all commands run persistently, along with command output (need some kind of GC or limits on storing output, to avoid filling the disk).
+* Able to transparently run commands on remote systems over an SSH tunnel, but all commands, input, interaction, etc. happen on a local client.
+* `tail -f webserver-{01..30}:/var/log/mumble/error.log`
+* `diff_output @host{1..5} mumblectl --status`
+* Shell aliases, utility scripts, environment variables, as much configuration as possible only needs to be done once, for yourself, instead of needing to be distributed across all systems you ever work on, without needing to care if they're out-of-date, shared accounts also used by others, etc.
+* All command history from all systems stored locally, so you can search through all history trivially without having to scrape it from many remote hosts.
+* Optionally, leave a daemon running on every host you work with, to continue tracking process status while disconnected.
+* If using daemons on remote hosts, store-and-forward messages along the network of daemons, to pick up transparently when connectivity is restored after disconnection.
+* Track overall system performance information from remote hosts running a daemon.  When desired/configured, display this information for the current (or selected) host (or hosts) in a panel in a dedicated region of the display, either as current values or a sparkline graph over time.
+* Transparently copy files or pipe input/output between any connected hosts, regardless of topology, without needing to manually route between bastion hosts, etc.
+* Scripting languae that can be used to run commands on the entire connected network of systems.
+* Integrations with programming languages and other interactive systems to act as a repl.
 
-I'd like to try experimenting with transparently providing additional capabilities to other native programs run through Weaver.  For example, I could expose a remote system's filesystem locally over a FUSE mount in a separate mount namespace, which might be kind of sane depending on what I export, or I could do the horrible insane option and hook into the program through ptrace(2).
+I am confident in impelemnting the technical backend of thie system, but I feel very intimidated and underconfident in my ability to make good UI and UX choices.  I am extremely interested in hearing from anyone who has either strong or detailed preferences about what specific user interactions should be taken to either perform or communicate the results of any of the above, or any other feature that you'd be interested in seeing as part of this work.
 
-To build weaver, make sure you have stack installed, and run 'stack build'.
+
+# TODO
+
+* Make better screen recording
+* Command prefix for UI interaction
+* Implement generic scrolling container widget for text-ui
+* Implement scrolling through command output, and command history
+* Search through commands and their output
+* Track sessions as arbitrary tags on command history items
+* Toggle between different layouts of arbitrary subsets of command history (windows/sessions/splits)
+* Lazy load command history on-demand, rather than slurping the entire command history up into the client
+* Add RPC-style messages, for responding to specific requests?
+* Persist command history to disk
+* Establish SSH connections
+* Start using a shell language parser of some kind, rather than execing bash
+* User alias configuration
+* User-configurable style/theme
