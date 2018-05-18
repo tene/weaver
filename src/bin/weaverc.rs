@@ -195,7 +195,7 @@ impl Widget for WeaverStateWidget {
                 None => false,
                 Some(idx) => idx == i,
             };
-            let mut child = render_command_summary(cmd, child_width, 10, selected);
+            let mut child = render_command_summary(cmd, child_width, 3, selected);
             let offset = child.size.height;
 
             ctr += offset;
